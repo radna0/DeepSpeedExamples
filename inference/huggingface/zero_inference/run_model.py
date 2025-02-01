@@ -27,6 +27,11 @@ from packaging import version
 
 assert version.parse(deepspeed.__version__) >= version.parse("0.10.3"), "ZeRO-Inference with weight quantization and kv cache offloading is available only in DeepSpeed 0.10.3+, please upgrade DeepSpeed"
 
+
+from torch_xla import runtime as xr
+import torch_xla as xla
+
+
 def get_tokenizer(model_name, config):
     if config.model_type == "opt":
         # opt175b is not available on HF (at this time),
@@ -59,6 +64,7 @@ def get_model_config(model_name):
     return config
 
 def get_ds_model(
+    args,
     model_name,
     cpu_offload,
     disk_offload,
@@ -171,6 +177,7 @@ def get_ds_model(
 
 
 def run_generation(
+    args,
     model_name,
     batch_size,
     prompt_len,
@@ -222,6 +229,7 @@ def run_generation(
     print("load model")
     with torch.no_grad():
         model = get_ds_model(
+            args,
             model_name,
             cpu_offload,
             disk_offload,
@@ -239,7 +247,7 @@ def run_generation(
         input_tokens = tokenizer.batch_encode_plus(prompts, return_tensors="pt", padding="max_length", max_length=prompt_len)
         for t in input_tokens:
             if torch.is_tensor(input_tokens[t]):
-                input_tokens[t] = input_tokens[t].to(torch.cuda.current_device())
+                input_tokens[t] = input_tokens[t].to(xla.device())
         return input_tokens
 
     input_tokens = _batch_encode(prompts)
@@ -297,7 +305,7 @@ def run_generation(
     decode_throughput = batch_size * (gen_len - 1) / max(decode_latency, 1e-10)
     num_generated_tokens = batch_size * gen_len
     total_throughput = num_generated_tokens / total_latency
-    gpu_peak_mem = get_accelerator().max_memory_allocated(torch.device("cuda"))
+    gpu_peak_mem = get_accelerator().max_memory_allocated()
     out_str = ""
 
     if verbose >= 2:
@@ -352,7 +360,24 @@ def run_generation(
         print(log_str)
 
 
-if __name__ == "__main__":
+
+def main(index, process_info):
+    xr.initialize_cache("/dev/shm")
+
+
+    local_rank = xr.local_ordinal()
+    WORLD_SIZE = int(os.environ.get("WORLD_SIZE", 1))
+    CROSS_RANK = int(os.environ.get("CROSS_RANK", 0))
+    rank = (WORLD_SIZE * CROSS_RANK) + local_rank
+    os.environ["LOCAL_RANK"] = str(local_rank // 2)
+    os.environ["RANK"] = str(rank // 2)
+    process_id = os.getpid()
+    if local_rank % 2 == 0:
+        process_info.append(process_id)
+    print(f"Process ID: {process_id} | Process Info: {process_info}")
+
+    print(f"LOCAL_RANK: {local_rank}, RANK: {rank}, WORLD_SIZE: {WORLD_SIZE}, CROSS_RANK: {CROSS_RANK}")
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="facebook/opt-1.3b", help="model name or path; currently only supports OPT and BLOOM models")
     parser.add_argument("--dummy", action="store_true", help="Use dummy weights for benchmark purposes.")
@@ -377,10 +402,12 @@ if __name__ == "__main__":
 
     deepspeed.init_distributed()    
     num_gpus_per_node = get_accelerator().device_count()
+    print(f"num_gpus_per_node = {num_gpus_per_node}")
     num_nodes = dist.get_world_size() // num_gpus_per_node
 
 
     run_generation(
+        args,
         args.model,
         args.batch_size,
         args.prompt_len,
@@ -400,3 +427,6 @@ if __name__ == "__main__":
         args.async_kv_offload,
         args.loops
     )
+
+if __name__ == "__main__":
+    main()

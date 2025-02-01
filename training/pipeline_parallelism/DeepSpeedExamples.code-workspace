@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		},
+		{
+			"path": "../../../DeepSpeed-XLA"
+		},
+		{
+			"path": "../../../.local/lib/python3.10/site-packages/deepspeed"
+		}
+	],
+	"settings": {}
+}

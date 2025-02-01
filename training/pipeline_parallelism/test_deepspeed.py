@@ -150,28 +150,13 @@ def train_pipe(args, part='parameters'):
 
 
 
-def main(index, process_info):
+def main():
     xr.initialize_cache("/dev/shm")
-
-
-    local_rank = xr.local_ordinal()
-    WORLD_SIZE = int(os.environ.get("WORLD_SIZE", 1))
-    CROSS_RANK = int(os.environ.get("CROSS_RANK", 0))
-    rank = (WORLD_SIZE * CROSS_RANK) + local_rank
-    os.environ["LOCAL_RANK"] = str(local_rank // 2)
-    os.environ["RANK"] = str(rank // 2)
-    process_id = os.getpid()
-    if local_rank % 2 == 0:
-        process_info.append(process_id)
-    print(f"Process ID: {process_id} | Process Info: {process_info}")
-
-    print(f"LOCAL_RANK: {local_rank}, RANK: {rank}, WORLD_SIZE: {WORLD_SIZE}, CROSS_RANK: {CROSS_RANK}")
 
     args = get_args()
 
     deepspeed.init_distributed(dist_backend=args.backend)
-    torch.cuda.set_device(args.local_rank)
-    args.local_rank =  local_rank
+    args.local_rank =  0
     
     if args.pipeline_parallel_size == 0:
         train_base(args)
