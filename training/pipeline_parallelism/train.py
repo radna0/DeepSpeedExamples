@@ -169,7 +169,7 @@ def main(index, process_info):
 
     args = get_args()
 
-    deepspeed.init_distributed(dist_backend=args.backend)
+    deepspeed.init_distributed(dist_backend=args.backend,init_method='xla://', auto_mpi_discovery=False)
     torch.cuda.set_device(args.local_rank)
     args.local_rank =  local_rank
     

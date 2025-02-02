@@ -18,7 +18,7 @@ from deepspeed.utils import RepeatingLoader
 import torch_xla as xla 
 import torch_xla.runtime as xr
 import torch_xla.distributed.xla_backend
-
+import torch_xla.distributed.xla_multiprocessing as xmp
 
 def cifar_trainset(local_rank, dl_path='/tmp/cifar10-data'):
     transform = transforms.Compose([
@@ -100,7 +100,7 @@ def train_base(args):
         inputs = batch[0].to(engine.device)
         labels = batch[1].to(engine.device)
 
-        outputs = compiled_engine(inputs)
+        outputs = engine(inputs)
         loss = criterion(outputs, labels)
         engine.backward(loss)
         engine.step()
@@ -138,7 +138,11 @@ def train_pipe(args, part='parameters'):
                          partition_method=part,
                          activation_checkpoint_interval=0)
 
+    print(f"[Rank: {args.local_rank}] Pipeline parallelism: {args.pipeline_parallel_size}")
+
     trainset = cifar_trainset(args.local_rank)
+
+    print(f"[Rank: {args.local_rank}] Stop Pipeline parallelism: {args.pipeline_parallel_size}")
 
     engine, _, _, _ = deepspeed.initialize(
         args=args,
@@ -153,19 +157,25 @@ def train_pipe(args, part='parameters'):
 
 
 def main(rank):
+    print(f"[rank={rank}] Process ID: {os.getpid()}") 
+    # set os LOCAL_RANK
     world_size = xr.world_size()
-    print(f'[rank={rank}] world_size={world_size}')
-    
+    args = get_args(rank=rank)
 
-    args = get_args(rank)
+    # set os LOCAL_RANK, WORLD_SIZE, RANK
+    os.environ['RANK'] = str(rank)
+    os.environ['LOCAL_RANK'] = str(rank)
+    os.environ['WORLD_SIZE'] = str(world_size)
 
-    deepspeed.init_distributed(dist_backend=args.backend, rank=rank, world_size=world_size)
+    deepspeed.init_distributed(dist_backend=args.backend, init_method='xla://', auto_mpi_discovery=False, dist_init_required=True, rank=rank, world_size=world_size)
+
+    args.local_rank =  rank
+
     
     if args.pipeline_parallel_size == 0:
         train_base(args)
     else:
         train_pipe(args)
-
 
 
 if __name__ == '__main__':

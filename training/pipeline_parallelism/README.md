@@ -16,3 +16,8 @@ DS_ACCELERATOR=xla python3.10 test_deepspeed.py --deepspeed_config=ds_config.jso
 DS_ACCELERATOR=xla python3.10 test_spmd_deepspeed.py --deepspeed_config=ds_config.json -p 0 --steps=200
 ```
 
+# XLA Multi Process
+```
+DS_ACCELERATOR=xla python3.10 test_distributed_deepspeed.py --deepspeed_config=ds_config.json -p 0 --steps=200
+```
+
