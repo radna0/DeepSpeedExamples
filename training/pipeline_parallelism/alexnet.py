@@ -9,7 +9,6 @@
 import torch
 import torch.nn as nn
 
-
 class AlexNet(nn.Module):
     def __init__(self, num_classes=1000):
         super(AlexNet, self).__init__()

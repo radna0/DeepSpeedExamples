@@ -15,7 +15,37 @@ import deepspeed
 from deepspeed.pipe import PipelineModule
 from deepspeed.utils import RepeatingLoader
 
-import torch_xla as xla 
+
+try:
+    import numpy as np
+    import torch_xla as xla
+    import torch_xla.core.xla_model as xm
+    from torch_xla import runtime as xr
+    import torch_xla.distributed.spmd as xs
+    # Import to register the `xla://` init_method
+    import torch_xla.distributed.xla_backend
+    from torch_xla.experimental.spmd_fully_sharded_data_parallel import (
+        _prepare_spmd_partition_spec,
+        SpmdFullyShardedDataParallel as FSDPv2,
+    )
+
+
+    xr.use_spmd()
+
+    num_devices = xr.global_runtime_device_count()
+    mesh_shape = (1, num_devices // 1)
+    device_ids = np.array(range(num_devices))
+    # To be noted, the mesh must have an axis named 'fsdp', which the weights and activations will be sharded on.
+    mesh = xs.Mesh(device_ids, mesh_shape, ("fsdp", "model"))
+    xs.set_global_mesh(mesh)
+
+    print("_________________________XLA is Available!")
+    XLA_AVAILABLE = True
+except:
+    print("_________________________XLA is not installed.")
+    XLA_AVAILABLE = False
+
+
 
 def cifar_trainset(local_rank, dl_path='/tmp/cifar10-data'):
     transform = transforms.Compose([
@@ -58,8 +88,12 @@ def get_args():
                         help='pipeline parallelism')
     parser.add_argument('--backend',
                         type=str,
-                        default='xla',
+                        default='gloo',
                         help='distributed backend')
+    parser.add_argument('--init-method',
+                        type=str,
+                        default='xla://',
+                        help='init method for distributed')
     parser.add_argument('--seed', type=int, default=1138, help='PRNG seed')
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
@@ -73,7 +107,6 @@ def train_base(args):
     #net = vgg19(num_classes=10)
     net = AlexNet(num_classes=10)
 
-
     trainset = cifar_trainset(args.local_rank)
 
     engine, _, dataloader, __ = deepspeed.initialize(
@@ -82,7 +115,6 @@ def train_base(args):
         model_parameters=[p for p in net.parameters() if p.requires_grad],
         training_data=trainset)
 
-    compiled_engine = torch.compile(engine, backend="openxla")
     dataloader = RepeatingLoader(dataloader)
     data_iter = iter(dataloader)
 
@@ -98,7 +130,7 @@ def train_base(args):
         inputs = batch[0].to(engine.device)
         labels = batch[1].to(engine.device)
 
-        outputs = compiled_engine(inputs)
+        outputs = engine(inputs)
         loss = criterion(outputs, labels)
         engine.backward(loss)
         engine.step()
@@ -107,7 +139,8 @@ def train_base(args):
             step += 1
             if rank == 0 and (step % 10 == 0):
                 print(f'step: {step:3d} / {args.steps:3d} loss: {loss}')
-        
+
+
 
 def join_layers(vision_model):
     layers = [
@@ -151,10 +184,11 @@ def train_pipe(args, part='parameters'):
 
 
 def main():
+    xr.initialize_cache("/dev/shm")
 
     args = get_args()
 
-    deepspeed.init_distributed(dist_backend=args.backend)
+    deepspeed.init_distributed(dist_backend=args.backend, init_method=args.init_method)
     args.local_rank =  0
     
     if args.pipeline_parallel_size == 0:

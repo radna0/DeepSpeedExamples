@@ -17,6 +17,8 @@ from deepspeed.utils import RepeatingLoader
 
 import torch_xla as xla 
 
+xla.experimental.eager_mode(True)
+
 def cifar_trainset(local_rank, dl_path='/tmp/cifar10-data'):
     transform = transforms.Compose([
         transforms.Resize(256),
@@ -93,7 +95,7 @@ def train_base(args):
 
     total_steps = args.steps * engine.gradient_accumulation_steps()
     step = 0
-    for micro_step in range(total_steps):
+    """ for micro_step in range(total_steps):
         batch = next(data_iter)
         inputs = batch[0].to(engine.device)
         labels = batch[1].to(engine.device)
@@ -106,7 +108,29 @@ def train_base(args):
         if micro_step % engine.gradient_accumulation_steps() == 0:
             step += 1
             if rank == 0 and (step % 10 == 0):
+                print(f'step: {step:3d} / {args.steps:3d} loss: {loss}') """
+
+    def step_fn(batch):
+        inputs = batch[0].to(engine.device)
+        labels = batch[1].to(engine.device)
+
+        outputs = compiled_engine(inputs)
+        loss = criterion(outputs, labels)
+        engine.backward(loss)
+        engine.step()
+        return loss
+
+    step_fn = xla.compile(step_fn)
+
+    for micro_step in range(total_steps):
+        batch = next(data_iter)
+        loss = step_fn(batch)
+
+        if micro_step % engine.gradient_accumulation_steps() == 0:
+            step += 1
+            if rank == 0 and (step % 10 == 0):
                 print(f'step: {step:3d} / {args.steps:3d} loss: {loss}')
+
         
 
 def join_layers(vision_model):
