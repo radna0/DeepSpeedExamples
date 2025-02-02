@@ -74,7 +74,7 @@ def get_args():
     parser = argparse.ArgumentParser(description='CIFAR')
     parser.add_argument('--local_rank',
                         type=int,
-                        default=-1,
+                        default=0,
                         help='local rank passed from distributed launcher')
     parser.add_argument('-s',
                         '--steps',
@@ -189,7 +189,6 @@ def main():
     args = get_args()
 
     deepspeed.init_distributed(dist_backend=args.backend, init_method=args.init_method)
-    args.local_rank =  0
     
     if args.pipeline_parallel_size == 0:
         train_base(args)

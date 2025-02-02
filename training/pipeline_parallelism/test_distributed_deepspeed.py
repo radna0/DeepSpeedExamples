@@ -16,6 +16,9 @@ from deepspeed.pipe import PipelineModule
 from deepspeed.utils import RepeatingLoader
 
 import torch_xla as xla 
+import torch_xla.runtime as xr
+import torch_xla.distributed.xla_backend
+
 
 def cifar_trainset(local_rank, dl_path='/tmp/cifar10-data'):
     transform = transforms.Compose([
@@ -40,11 +43,11 @@ def cifar_trainset(local_rank, dl_path='/tmp/cifar10-data'):
     return trainset
 
 
-def get_args():
+def get_args(rank=0):
     parser = argparse.ArgumentParser(description='CIFAR')
     parser.add_argument('--local_rank',
                         type=int,
-                        default=0,
+                        default=rank,
                         help='local rank passed from distributed launcher')
     parser.add_argument('-s',
                         '--steps',
@@ -97,7 +100,7 @@ def train_base(args):
         inputs = batch[0].to(engine.device)
         labels = batch[1].to(engine.device)
 
-        outputs = engine(inputs)
+        outputs = compiled_engine(inputs)
         loss = criterion(outputs, labels)
         engine.backward(loss)
         engine.step()
@@ -149,11 +152,14 @@ def train_pipe(args, part='parameters'):
 
 
 
-def main():
+def main(rank):
+    world_size = xr.world_size()
+    print(f'[rank={rank}] world_size={world_size}')
+    
 
-    args = get_args()
+    args = get_args(rank)
 
-    deepspeed.init_distributed(dist_backend=args.backend)
+    deepspeed.init_distributed(dist_backend=args.backend, rank=rank, world_size=world_size)
     
     if args.pipeline_parallel_size == 0:
         train_base(args)
@@ -163,4 +169,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    xla.launch(main)
